@@ -7,6 +7,7 @@ import pandas as pd
 import time
 import re
 import html
+import hashlib
 from urllib.parse import urlparse
 
 # ==========================================
@@ -22,6 +23,8 @@ if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
     st.error("⚠️ Streamlit Secrets에 GEMINI_API_KEY를 설정해 주세요.")
+    # [수정] API 키가 없으면 이후 버튼을 눌렀을 때 나오는 불필요한 오류를 막기 위해 여기서 중단
+    st.stop()
 
 AMAZON_RESTRICTED_WORDS = [
     "best", "top", "free shipping", "guaranteed", "fda approved",
@@ -159,18 +162,38 @@ current_p_data["tone_extra"] = tone_extra
 
 st.sidebar.markdown("---")
 st.sidebar.info(
-    "💡 **프로젝트 세션 자동 저장 작동 중**\n"
-    "- 프로젝트를 변경해도 입력 내용, 국가/톤 설정, AI 생성 결과가 보존됩니다.\n"
-    "- (단, 업로드한 이미지는 프로젝트별로 저장되지 않습니다.)"
+    "💡 **현재 브라우저 세션 내 자동 저장 중**\n"
+    "- 프로젝트를 변경해도 입력 내용, 국가/톤 설정, AI 생성 결과가 이 세션 동안은 보존됩니다.\n"
+    "- 앱이 재시작되거나 세션이 종료되면 데이터가 사라질 수 있습니다 (영구 저장 아님).\n"
+    "- 업로드한 이미지는 프로젝트별로 저장되지 않습니다."
 )
 
 # ==========================================
 # 3. 헬퍼 함수
 # ==========================================
 def check_forbidden_words(text):
+    """
+    [수정] 단순 포함 검사(in)는 'top'이 'desktop', 'topical' 같은 단어 안에서도
+    감지되는 오탐(false positive)이 있었다. 알파벳/숫자로만 이루어진 단어는
+    단어 경계(\\b)를 적용해 독립된 단어로 쓰였을 때만 감지한다.
+    ('free shipping'처럼 공백이 포함된 구문은 기존처럼 부분 문자열 검사를 유지)
+    """
+    found = []
     text_lower = text.lower()
-    found = [word for word in AMAZON_RESTRICTED_WORDS if word in text_lower]
-    return list(set(found))
+
+    for word in AMAZON_RESTRICTED_WORDS:
+        word_lower = word.lower()
+        escaped = re.escape(word_lower)
+
+        if re.fullmatch(r"[a-z0-9]+", word_lower):
+            pattern = rf"\b{escaped}\b"
+        else:
+            pattern = escaped
+
+        if re.search(pattern, text_lower):
+            found.append(word)
+
+    return sorted(set(found))
 
 def is_valid_amazon_url(url):
     """아마존 도메인 형식인지 최소한으로 검증한다."""
@@ -196,11 +219,20 @@ def crawl_amazon_url(url):
         soup = BeautifulSoup(res.text, "html.parser")
         title_tag = soup.select_one("#productTitle")
         bullet_tags = soup.select("#feature-bullets li span")
-        return {
-            "success": True,
-            "title": title_tag.get_text(" ", strip=True) if title_tag else "",
-            "bullets": [b.get_text(" ", strip=True) for b in bullet_tags if b.get_text(strip=True)]
-        }
+
+        title = title_tag.get_text(" ", strip=True) if title_tag else ""
+        bullets = [b.get_text(" ", strip=True) for b in bullet_tags if b.get_text(strip=True)]
+
+        # [수정] HTTP 상태코드가 200이어도 Amazon이 CAPTCHA/로봇 확인 페이지를
+        # 돌려주면 제목·Bullet이 모두 비어있게 된다. 이 경우를 "성공"으로 잘못
+        # 판단해 빈 정보를 그대로 AI 프롬프트에 흘려보내지 않도록 실패 처리한다.
+        if not title and not bullets:
+            return {
+                "success": False,
+                "error": "상품 제목과 Bullet Point를 찾지 못했습니다. Amazon 접근 제한(봇 차단) 가능성이 있습니다."
+            }
+
+        return {"success": True, "title": title, "bullets": bullets}
     except requests.RequestException as e:
         return {"success": False, "error": str(e)}
 
@@ -218,11 +250,16 @@ def render_result_box(result_text, file_prefix="amazon_pdp"):
             key=f"download_{file_prefix}"  # [수정] 탭 간 위젯 key 충돌 방지
         )
 
+    # [수정] key가 고정돼 있으면 Streamlit이 사용자가 상자를 편집 중이라고 보고
+    # value를 새 결과로 갱신하지 않는 문제가 있었다 (재생성해도 Preview는 바뀌는데
+    # 복사용 텍스트 상자는 이전 내용 그대로 남음). 결과 내용의 해시를 key에 포함시켜
+    # 내용이 바뀔 때마다 위젯을 새로 만들도록 강제한다.
+    result_hash = hashlib.md5(result_text.encode("utf-8")).hexdigest()[:8]
     st.text_area(
         label="📌 아래 상자 우측 상단의 [복사 아이콘]을 누르면 전체 문구가 클립보드에 바로 복사됩니다:",
         value=result_text,
         height=250,
-        key=f"result_text_{file_prefix}"  # [수정] 탭 간 위젯 key 충돌 방지
+        key=f"result_text_{file_prefix}_{result_hash}"
     )
 
     with st.expander("👁️ 서식 포함 예쁘게 보기 (Preview)", expanded=True):
@@ -386,12 +423,19 @@ if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
                         status_text.text(f"처리 중: {i+1}번째 상품 ({i+1}/{total_items})")
 
                         # [수정] parse_bulk_listing()이 기대하는 출력 포맷을 명시적으로 강제한다.
+                        # 타겟 언어가 일본어/독일어 등일 때 AI가 "## 1. Product Title" 같은
+                        # 섹션 헤더까지 번역해버리면 파서가 못 찾아 CSV가 빈 칸으로 나오는
+                        # 문제가 있었다. 헤더는 언어와 무관하게 영어 그대로 유지하도록 못박는다.
                         prompt = f"""{base_instruction}
 
                         다음 상품 정보를 바탕으로 아마존 SEO Listing을 생성하세요.
                         상품정보: {product_info_bulk}
 
                         [출력 형식 - 반드시 아래 마크다운 형식을 그대로 지켜서 작성하세요]
+                        [중요] "## 1. Product Title", "## 2. Bullet Points" 라는 섹션 헤더 문구 자체는
+                        타겟 언어(일본어/독일어/프랑스어 등)와 관계없이 절대 번역하지 말고 영어 그대로 출력하세요.
+                        헤더 아래의 실제 내용(제목, Bullet 문구)만 타겟 언어로 작성하면 됩니다.
+
                         ## 1. Product Title
                         (제목 한 줄)
 
@@ -408,12 +452,26 @@ if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
 
                         if raw_text:
                             title, b1, b2, b3, b4, b5 = parse_bulk_listing(raw_text)
-                            titles.append(title)
-                            b1_list.append(b1)
-                            b2_list.append(b2)
-                            b3_list.append(b3)
-                            b4_list.append(b4)
-                            b5_list.append(b5)
+                            bullets_parsed = [b1, b2, b3, b4, b5]
+
+                            # [수정] AI 응답은 받았지만 모델이 지정된 출력 포맷을 지키지 않아
+                            # 제목이나 Bullet이 파싱되지 않은 경우, 조용히 빈 값으로 저장하지 않고
+                            # "Parse Error"로 명확히 표시해 사용자가 Full_Raw_Output을 확인하도록 한다.
+                            if not title or sum(bool(b) for b in bullets_parsed) < 5:
+                                titles.append(title if title else "Parse Error")
+                                b1_list.append(b1 if b1 else "⚠️ 출력 형식 파싱 실패 - Full_Raw_Output 열 확인 필요")
+                                b2_list.append(b2)
+                                b3_list.append(b3)
+                                b4_list.append(b4)
+                                b5_list.append(b5)
+                            else:
+                                titles.append(title)
+                                b1_list.append(b1)
+                                b2_list.append(b2)
+                                b3_list.append(b3)
+                                b4_list.append(b4)
+                                b5_list.append(b5)
+
                             raw_results.append(raw_text)
                         else:
                             titles.append("Error")
@@ -656,19 +714,30 @@ else:
                 st.warning("상단의 경쟁사 비교 설정에 경쟁사 URL 또는 정보를 입력해 주세요!")
             else:
                 with st.spinner("내 제품과 경쟁사 비교 분석 중..."):
-                    comp_lines = [f"URL: {competitor_url}" if competitor_url else "", f"메모: {competitor_info}" if competitor_info else ""]
+                    # [수정] 이전에는 URL을 먼저 comp_lines에 추가한 뒤 검증했기 때문에,
+                    # "형식이 올바르지 않다"는 경고를 띄우면서도 잘못된 URL 문자열이
+                    # 실제로는 그대로 프롬프트에 전달되는 모순이 있었다.
+                    # 검증을 통과한 경우에만 URL(및 크롤링 결과)을 추가하도록 순서를 바꾼다.
+                    comp_lines = []
+                    if competitor_info:
+                        comp_lines.append(f"메모: {competitor_info}")
 
                     if competitor_url:
                         if not is_valid_amazon_url(competitor_url):
-                            st.warning("⚠️ 경쟁사 URL이 유효한 Amazon URL 형식이 아닙니다. 메모만 참고합니다.")
+                            st.warning("⚠️ 경쟁사 URL 형식이 올바르지 않아 URL은 분석에서 제외하고 메모만 참고합니다.")
                         else:
+                            comp_lines.append(f"URL: {competitor_url}")
                             comp_crawl = crawl_amazon_url(competitor_url)
-                            if comp_crawl.get("success") and comp_crawl.get("title"):
-                                comp_lines.append(f"수집된 경쟁사 제목: {comp_crawl['title']}")
+                            if comp_crawl.get("success"):
+                                if comp_crawl.get("title"):
+                                    comp_lines.append(f"수집된 경쟁사 제목: {comp_crawl['title']}")
+                                if comp_crawl.get("bullets"):
+                                    bullet_text = "\n".join(f"- {b}" for b in comp_crawl["bullets"][:10])
+                                    comp_lines.append(f"수집된 경쟁사 특징(Bullet Points):\n{bullet_text}")
                             else:
-                                st.warning("⚠️ 경쟁사 페이지 수집에 실패했습니다. 입력하신 메모만 근거로 분석합니다.")
+                                st.warning("⚠️ 경쟁사 페이지 수집에 실패했습니다 (봇 차단 가능성). 입력하신 메모만 근거로 분석합니다.")
 
-                    comp_text = "\n[경쟁사 정보]\n" + "\n".join(line for line in comp_lines if line)
+                    comp_text = "\n[경쟁사 정보]\n" + "\n".join(comp_lines)
 
                     prompt = f"""
                     내 제품 정보와 다음 경쟁사 정보를 비교 분석해 주세요: {comp_text}
