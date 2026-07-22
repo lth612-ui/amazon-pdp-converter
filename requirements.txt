@@ -1,4 +1,4 @@
 streamlit
-google-genai
+google-generativeai
 beautifulsoup4
-pillow
+requests
