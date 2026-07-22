@@ -152,7 +152,7 @@ with tab1:
                 1. Product Title (200자 이내, 핵심 키워드 대문자 강조)
                 2. Bullet Points 5개 (핵심 셀링 포인트 위주)
                 3. Search Terms (249 Bytes 이내, 쉼표 없이 키워드만)
-                4. Product Description
+                4. Product Description (⚠️ 중요: <p>, <b>, <br> 등의 HTML 태그를 절대로 사용하지 말고, 순수 텍스트(Plain Text)와 줄바꿈으로만 깔끔하게 작성하세요.)
                 """
                 response = model.generate_content(inputs + [prompt])
                 st.markdown(response.text)
