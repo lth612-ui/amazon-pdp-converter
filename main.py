@@ -9,7 +9,7 @@ from google.genai import types
 # ---------------------------------------------------------
 # 1. 페이지 및 사이드바 설정
 # ---------------------------------------------------------
-st.set_page_config(page_title="클릭티브 PDP Converter (ULTIMATE)", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Chris PDP Converter (ULTIMATE)", layout="wide", page_icon="🚀")
 
 # Gemini API 설정
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
