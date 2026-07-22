@@ -257,7 +257,7 @@ with main_tab3:
 # ---------------------------------------------------------
 with main_tab4:
     st.subheader("4. 경쟁사 Listing 비교 및 차별화 전략")
-    col1, col2 = st.subplots(2)
+    col1, col2 = st.columns(2)
     with col1:
         my_prod = st.text_area("내 상품 특징:", placeholder="내 제품의 장점 및 성분...")
     with col2:
