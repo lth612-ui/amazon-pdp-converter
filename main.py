@@ -53,7 +53,7 @@ brand_tone = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **자동 검증 로직 작동 중**\n- Title 200자 / Search Terms 249 Bytes\n- 아마존 금지어 자동 체크\n- 이미지 & 링크 자동 비전 분석")
+st.sidebar.info("💡 **자동 검증 로직 작동 중**\n- Title 200자 / Search Terms 249 Bytes\n- 아마존 금지어 자동 체크\n- 원클릭 복사 & TXT 다운로드 제공")
 
 # 헬퍼 함수
 def check_forbidden_words(text):
@@ -94,8 +94,6 @@ with col_input2:
     product_name = st.text_input("제품명 (미입력 시 URL/이미지에서 자동 추론)", placeholder="예: 비타민 C 세럼 30ml")
     key_features = st.text_area("주요 특징/성분/소구점", placeholder="예: 순수 비타민C 15%, 피부 톤 개선, 끈적임 없는 수분제형", height=100)
 
-st.markdown("---")
-
 # --- 경쟁사 입력 파트 (선택) ---
 with st.expander("⚔️ 경쟁사 비교 설정 (선택사항 - 클릭하여 열기)"):
     col_comp1, col_comp2 = st.columns(2)
@@ -106,7 +104,7 @@ with st.expander("⚔️ 경쟁사 비교 설정 (선택사항 - 클릭하여 �
 
 st.markdown("---")
 
-# 4. Output 탭 구성 (시딩/마케팅 가이드 포함 5개 탭)
+# 4. Output 탭 구성
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 Amazon Listing (PDP)", 
     "🎨 A+ Content Plan", 
@@ -122,7 +120,6 @@ base_instruction = f"""
 - 지정된 언어로 매끄럽고 설득력 있게 작성하세요.
 """
 
-# 입력 데이터 수집 함수
 def get_input_contents():
     contents = [base_instruction]
     if my_product_url:
@@ -138,6 +135,29 @@ def get_input_contents():
         contents.append(img)
     return contents
 
+# 공통 결과 출력 함수 (복사 영역 + 다운로드 버튼 + 프리뷰)
+def render_result_box(result_text, file_prefix="amazon_pdp"):
+    st.markdown("---")
+    st.subheader("📄 AI 생성 결과 (원클릭 복사 & TXT 다운로드)")
+    
+    col_dl, col_blank = st.columns([2, 8])
+    with col_dl:
+        st.download_button(
+            label="📥 전체 결과 TXT 다운로드",
+            data=result_text,
+            file_name=f"{file_prefix}_result.txt",
+            mime="text/plain"
+        )
+        
+    st.text_area(
+        label="📌 아래 상자 우측 상단의 [복사 아이콘]을 누르면 전체 문구가 클립보드에 바로 복사됩니다:",
+        value=result_text,
+        height=250
+    )
+    
+    with st.expander("👁️ 서식 포함 예쁘게 보기 (Preview)", expanded=True):
+        st.markdown(result_text)
+
 # Tab 1: Listing
 with tab1:
     if st.button("🚀 PDP 리스팅 생성하기", type="primary"):
@@ -148,25 +168,43 @@ with tab1:
             with st.spinner("이미지/링크/텍스트 분석 후 리스팅 작성 중..."):
                 model = genai.GenerativeModel(selected_model)
                 prompt = """
-위 정보(이미지, URL, 텍스트)를 바탕으로 아마존 SEO 최적화 Listing을 생성하세요.
+                위 정보(이미지, URL, 텍스트)를 바탕으로 아마존 SEO 최적화 Listing을 생성하세요.
 
-[작성 지침]
-- 4번 Product Description 작성 시 <p>, <b>, <br> 등 어떠한 HTML 태그도 절대로 포함하지 마세요.
-- 오직 Plain Text와 줄바꿈(Enter)만을 사용하세요.
-- 출력 시 지침 사항이나 주의사항 텍스트는 결과물에 포함하지 마세요.
+                [내부 가이드라인 - 출력문에 절대 노출하지 말 것]
+                - Product Description 부분에는 <p>, <b>, <br> 등의 모든 HTML 태그를 절대로 쓰지 마세요.
+                - Product Description은 오직 순수 텍스트(Plain Text)와 줄바꿈(Enter)만 사용하세요.
 
-[출력 형식]
-1. Product Title
-2. Bullet Points (5 Key Selling Points)
-3. Search Terms (Backend Keywords)
-4. Product Description
-"""
+                [출력 형식]
+                # Amazon Listing Optimization
+
+                ## 1. Product Title
+                (Title 작성)
+
+                ## 2. Bullet Points (5 Key Selling Points)
+                * [BENEFIT 1] 내용...
+                * [BENEFIT 2] 내용...
+                * [BENEFIT 3] 내용...
+                * [BENEFIT 4] 내용...
+                * [BENEFIT 5] 내용...
+
+                ## 3. Search Terms (Backend Keywords)
+                (249바이트 이내 키워드만 작성)
+
+                ## 4. Product Description
+                (Plain text 본문 작성)
+                """
                 response = model.generate_content(inputs + [prompt])
-                st.markdown(response.text)
+                res_text = response.text
                 
-                forbidden = check_forbidden_words(response.text)
+                # 결과 렌더링
+                render_result_box(res_text, "pdp_listing")
+                
+                # 금지어 및 정책 체크
+                forbidden = check_forbidden_words(res_text)
                 if forbidden:
                     st.error(f"⚠️ **아마존 금지어 주의**: {', '.join(forbidden)}")
+                else:
+                    st.success("✅ 아마존 정책 위반 금지어가 감지되지 않았습니다.")
 
 # Tab 2: A+ Content
 with tab2:
@@ -186,7 +224,7 @@ with tab2:
                 - 모듈 5: Brand Story & Cross-selling
                 """
                 response = model.generate_content(inputs + [prompt])
-                st.markdown(response.text)
+                render_result_box(response.text, "aplus_content")
 
 # Tab 3: PPC Strategy
 with tab3:
@@ -205,7 +243,7 @@ with tab3:
                 4. Negative Keywords (광고비 절감을 위한 제외 키워드 5개)
                 """
                 response = model.generate_content(inputs + [prompt])
-                st.markdown(response.text)
+                render_result_box(response.text, "ppc_keywords")
 
 # Tab 4: Competitor Comparison
 with tab4:
@@ -227,9 +265,9 @@ with tab4:
                 4. 1:1 비교 요약표 (성분/기능, 가성비, 타겟층, 소구점)
                 """
                 response = model.generate_content(inputs + [prompt])
-                st.markdown(response.text)
+                render_result_box(response.text, "competitor_analysis")
 
-# Tab 5: Seeding & Marketing Guide (신규)
+# Tab 5: Seeding & Marketing Guide
 with tab5:
     st.subheader("📢 인플루언서 시딩 & SNS 마케팅 가이드라인")
     if st.button("📢 시딩 & 마케팅 가이드 생성"):
@@ -254,4 +292,4 @@ with tab5:
                    - CTA (Call To Action - 구매 유도 문구)
                 """
                 response = model.generate_content(inputs + [prompt])
-                st.markdown(response.text)
+                render_result_box(response.text, "seeding_guide")
