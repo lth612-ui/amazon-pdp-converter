@@ -16,7 +16,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# API 키 설정 (기존 구조 완벽 유지)
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
@@ -27,17 +26,37 @@ AMAZON_RESTRICTED_WORDS = [
     "cure", "miracle", "100%", "#1", "cheapest", "discount"
 ]
 
+# 세션 상태 초기화 (프로젝트 목록 관리)
+if "project_list" not in st.session_state:
+    st.session_state.project_list = ["Project_Serum_01", "Project_Mask_02"]
+
 # ==========================================
 # 2. 사이드바 옵션
 # ==========================================
 st.sidebar.title("⚙️ 옵션 및 설정")
 
-# 📁 [신규 기능 1] 프로젝트 히스토리
 st.sidebar.subheader("📂 프로젝트 관리")
-selected_project = st.sidebar.selectbox("최근 작업 불러오기", ["새 프로젝트 (초기화)", "Project_Serum_01", "Project_Mask_02"])
+
+# 새 프로젝트 생성 UI
+new_proj_name = st.sidebar.text_input("➕ 새 프로젝트 생성", placeholder="예: Project_Sunscreen_03")
+if st.sidebar.button("프로젝트 추가", use_container_width=True):
+    if new_proj_name.strip():
+        if new_proj_name.strip() not in st.session_state.project_list:
+            st.session_state.project_list.append(new_proj_name.strip())
+            st.sidebar.success(f"'{new_proj_name.strip()}' 생성 완료!")
+        else:
+            st.sidebar.warning("이미 존재하는 프로젝트명입니다.")
+    else:
+        st.sidebar.warning("프로젝트 이름을 입력해 주세요.")
+
+# 기존 프로젝트 선택
+selected_project = st.sidebar.selectbox(
+    "📁 작업할 프로젝트 선택", 
+    ["새 작업 (기본)"] + st.session_state.project_list
+)
+
 st.sidebar.markdown("---")
 
-# 기존 모델 및 설정 (모델명은 실제 작동하는 1.5 버전으로 수정)
 model_choice = st.sidebar.radio(
     "Gemini 모델 선택",
     ("Flash (빠른 속도)", "Pro (고품질 분석)")
@@ -55,7 +74,6 @@ target_country = st.sidebar.selectbox(
     )
 )
 
-# 🏷️ [기존 + 신규 통합] 브랜드 톤앤매너
 brand_tone = st.sidebar.selectbox(
     "🎯 브랜드 톤 앤 매너",
     (
@@ -71,10 +89,12 @@ st.sidebar.markdown("---")
 st.sidebar.info("💡 **자동 검증 로직 작동 중**\n- Title 200자 / Search Terms 249 Bytes\n- 아마존 금지어 자동 체크\n- 원클릭 복사 & TXT 다운로드 제공")
 
 # ==========================================
-# 🛠️ 헬퍼 함수
+# 3. 헬퍼 함수
 # ==========================================
 def check_forbidden_words(text):
-    found = [word for word in AMAZON_RESTRICTED_WORDS if word in text.lower()]
+    """대소문자 구분 없이 아마존 금지어를 검사합니다."""
+    text_lower = text.lower()
+    found = [word for word in AMAZON_RESTRICTED_WORDS if word in text_lower]
     return list(set(found))
 
 def crawl_amazon_url(url):
@@ -93,7 +113,6 @@ def crawl_amazon_url(url):
         return url
 
 def render_result_box(result_text, file_prefix="amazon_pdp"):
-    """기존 대표님이 만드신 완벽한 UI 함수 유지"""
     st.markdown("---")
     st.subheader("📄 AI 생성 결과 (원클릭 복사 & TXT 다운로드)")
     
@@ -115,26 +134,55 @@ def render_result_box(result_text, file_prefix="amazon_pdp"):
     with st.expander("👁️ 서식 포함 예쁘게 보기 (Preview)", expanded=True):
         st.markdown(result_text, unsafe_allow_html=True)
 
-def highlight_usp(text, keywords):
-    """[신규] USP 키워드 형광펜 처리 함수"""
-    for kw in keywords:
-        text = re.sub(f"(?i)({kw})", f"<mark style='background-color: #ffeb3b; padding: 2px 5px; border-radius: 3px; font-weight: bold;'>\\1</mark>", text)
-    return text
+def highlight_usp(text, raw_keywords):
+    """입력 키워드(한/영) 및 주요 명사를 지능적으로 추론하여 노란색 형광펜을 적용합니다."""
+    keywords_to_highlight = set()
+    
+    if isinstance(raw_keywords, str):
+        words = [w.strip() for w in re.split(r'[,/|\s]+', raw_keywords) if len(w.strip()) > 1]
+        for w in words:
+            keywords_to_highlight.add(w)
+            
+    auto_patterns = [r'\b[A-Z0-9\-\s]{3,}\b', r'Niacinamide', r'Hyaluronic', r'Collagen', r'Peptide', r'Absorption', r'Fast-Acting']
+    for pat in auto_patterns:
+        matches = re.findall(pat, text, flags=re.IGNORECASE)
+        for m in matches:
+            if len(m.strip()) > 3 and not m.lower().startswith("http"):
+                keywords_to_highlight.add(m.strip())
+
+    highlighted = text
+    for kw in list(keywords_to_highlight)[:5]:
+        pattern = re.compile(re.escape(kw), re.IGNORECASE)
+        highlighted = pattern.sub(f"<mark style='background-color: #ffeb3b; color: #111111; padding: 2px 5px; border-radius: 3px; font-weight: bold;'>{kw}</mark>", highlighted)
+    return highlighted
+
+def parse_bulk_listing(raw_text):
+    """Bulk 생성 시 한 셀에 입력된 결과에서 Title과 Bullet 1~5를 개별 컬럼으로 분리합니다."""
+    title = ""
+    bullets = ["", "", "", "", ""]
+    
+    title_match = re.search(r"(?:1\.\s*Product Title|Title)[:\n]*\s*(.*?)(?=\n+#|\n+2\.|\n+Bullet|\Z)", raw_text, re.DOTALL | re.IGNORECASE)
+    if title_match:
+        title = title_match.group(1).strip()
+        
+    bullet_matches = re.findall(r"(?:[*•]|\d+\.)\s*(.*)", raw_text)
+    clean_bullets = [b.strip() for b in bullet_matches if len(b.strip()) > 5]
+    
+    for i in range(min(5, len(clean_bullets))):
+        bullets[i] = clean_bullets[i]
+        
+    return title, bullets[0], bullets[1], bullets[2], bullets[3], bullets[4]
 
 # ==========================================
-# 🚀 3. 메인 화면 UI
+# 4. 메인 화면 UI
 # ==========================================
 st.title("🚀 Chris PDP Converter (ULTIMATE)")
-st.caption("아마존 PDP 최적화, A+ Content, PPC 키워드, 경쟁사 분석 및 인플루언서 시딩 가이드라인")
+st.caption(f"현재 선택된 프로젝트: **{selected_project}** | 아마존 PDP, A+ Content, PPC, 경쟁사 분석 & 시딩 가이드")
 
-# 📦 [신규 기능 3] 작업 모드 선택
 work_mode = st.radio("🛠️ 작업 모드 선택", ["단일 상품 정밀 분석 (Single)", "여러 상품 일괄 생성 (Bulk CSV)"], horizontal=True)
 st.divider()
 
 if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
-    # ------------------------------------------------
-    # 📦 Bulk Upload 모드 (다중 생성)
-    # ------------------------------------------------
     st.subheader("📦 다중 상품 일괄 생성 (Bulk Processing)")
     st.info("제품명이나 특징이 담긴 CSV 파일을 업로드하면 한 번에 리스팅을 생성합니다.")
     
@@ -147,7 +195,11 @@ if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
         if st.button("🚀 일괄 생성 시작 (Batch Run)", type="primary"):
             progress_bar = st.progress(0)
             status_text = st.empty()
-            results = []
+            
+            titles = []
+            b1_list, b2_list, b3_list, b4_list, b5_list = [], [], [], [], []
+            raw_results = []
+            
             total_items = len(df)
             model = genai.GenerativeModel(selected_model)
             
@@ -160,24 +212,45 @@ if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
                 상품정보: {product_info_bulk}"""
                 
                 try:
-                    time.sleep(2) # API 한도 보호를 위한 딜레이
+                    time.sleep(2)
                     response = model.generate_content(prompt)
-                    results.append(response.text)
+                    raw_text = response.text
+                    
+                    title, b1, b2, b3, b4, b5 = parse_bulk_listing(raw_text)
+                    
+                    titles.append(title)
+                    b1_list.append(b1)
+                    b2_list.append(b2)
+                    b3_list.append(b3)
+                    b4_list.append(b4)
+                    b5_list.append(b5)
+                    raw_results.append(raw_text)
+                    
                 except Exception as e:
-                    results.append(f"에러 발생: {e}")
+                    titles.append("Error")
+                    b1_list.append(str(e))
+                    b2_list.append("")
+                    b3_list.append("")
+                    b4_list.append("")
+                    b5_list.append("")
+                    raw_results.append(f"에러 발생: {e}")
                 
                 progress_bar.progress((i + 1) / total_items)
                 
-            df['AI_Generated_Listing'] = results
+            df['AI_Title'] = titles
+            df['Bullet_1'] = b1_list
+            df['Bullet_2'] = b2_list
+            df['Bullet_3'] = b3_list
+            df['Bullet_4'] = b4_list
+            df['Bullet_5'] = b5_list
+            df['Full_Raw_Output'] = raw_results
+            
             status_text.text("✅ 일괄 생성 완료! 아래에서 파일을 다운로드하세요.")
             
             csv_data = df.to_csv(index=False).encode('utf-8-sig')
             st.download_button("📥 전체 결과 다운로드 (CSV)", data=csv_data, file_name=f"bulk_generated_{int(time.time())}.csv", mime="text/csv")
 
 else:
-    # ------------------------------------------------
-    # 🎯 Single 분석 모드 (기존 대표님 코드 100% 유지 + 신규 기능 통합)
-    # ------------------------------------------------
     st.markdown("### 📥 1. 제품 정보 입력 (링크/이미지/텍스트 중 선택 가능)")
 
     col_input1, col_input2 = st.columns(2)
@@ -201,7 +274,6 @@ else:
 
     st.markdown("---")
 
-    # 4. Output 탭 구성
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📝 Amazon Listing (PDP)", 
         "🎨 A+ Content Plan", 
@@ -212,6 +284,7 @@ else:
 
     base_instruction = f"""
     [기본 지침]
+    - 프로젝트명: {selected_project}
     - 타겟 국가/언어: {target_country}
     - 브랜드 톤앤매너: {brand_tone}
     - 추가 지시사항: {tone_extra}
@@ -260,26 +333,24 @@ else:
                         response = model.generate_content(inputs + [prompt])
                         res_text = response.text
                         
-                        # 🛡️ [신규 기능 4] 정책 검사 & SEO 점수 대시보드
+                        full_check_text = f"{product_name} {key_features} {res_text}"
+                        forbidden = check_forbidden_words(full_check_text)
+                        
                         st.subheader("📊 리스팅 최적화 리포트")
                         col1, col2 = st.columns([1, 2])
                         
-                        forbidden = check_forbidden_words(res_text)
-                        
                         with col1:
-                            # 금지어 유무에 따른 가상의 SEO 점수 계산
-                            seo_score = 100 - (len(forbidden) * 15)
-                            seo_score = max(seo_score, 40) # 최소 40점
+                            seo_score = max(0, 100 - (len(forbidden) * 20))
                             st.metric(label="SEO Optimization Score", value=f"{seo_score} / 100")
                             st.progress(seo_score / 100)
                             
                         with col2:
                             if forbidden:
-                                st.error(f"⚠️ **아마존 정책 위반 의심 단어 감지**: {', '.join(forbidden)}")
+                                st.error(f"⚠️ **아마존 정책 위반 의심 단어 감지 ({len(forbidden)}개)**: {', '.join(forbidden)}")
                             else:
                                 st.success("✅ 아마존 정책 위반 금지어가 감지되지 않았습니다.")
                         
-                        render_result_box(res_text, "pdp_listing")
+                        render_result_box(res_text, f"{selected_project}_pdp_listing")
                         
                     except Exception as e:
                         st.error(f"API 호출 중 오류 발생: {e}")
@@ -302,7 +373,7 @@ else:
                     - 모듈 5: Brand Story & Cross-selling
                     """
                     response = model.generate_content(inputs + [prompt])
-                    render_result_box(response.text, "aplus_content")
+                    render_result_box(response.text, f"{selected_project}_aplus_content")
 
     # Tab 3: PPC Strategy
     with tab3:
@@ -321,7 +392,7 @@ else:
                     4. Negative Keywords (광고비 절감을 위한 제외 키워드 5개)
                     """
                     response = model.generate_content(inputs + [prompt])
-                    render_result_box(response.text, "ppc_keywords")
+                    render_result_box(response.text, f"{selected_project}_ppc_keywords")
 
     # Tab 4: Competitor Comparison
     with tab4:
@@ -345,21 +416,19 @@ else:
                     response = model.generate_content(inputs + [prompt])
                     res_text = response.text
                     
-                    # 🎯 [신규 기능 5] 경쟁사 차별화 포인트(USP) 자동 하이라이트
                     st.markdown("#### 💡 Our Unique Selling Proposition (USP) Highlight")
                     
-                    # '주요 특징'에 입력된 내용 중 일부 단어를 추출하여 결과에서 형광펜 처리
-                    core_keywords = []
-                    if key_features:
-                        words = [w.strip() for w in key_features.replace(",", " ").split() if len(w) > 1]
-                        core_keywords = words[:3] # 앞의 3개 핵심 단어만 하이라이트 타겟으로 사용
+                    highlighted_text = highlight_usp(res_text, key_features)
+                    st.markdown(
+                        f"""
+                        <div style="background-color: #1e1e24; color: #e0e0e0; padding: 18px; border-radius: 8px; border: 1px solid #33333e; height: 260px; overflow-y: scroll; line-height: 1.6;">
+                            {highlighted_text}
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
                     
-                    if core_keywords:
-                        highlighted_text = highlight_usp(res_text, core_keywords)
-                        st.markdown(f"<div style='background-color: #f8f9fa; padding: 15px; border-radius: 5px; height: 250px; overflow-y: scroll;'>{highlighted_text}</div>", unsafe_allow_html=True)
-                    
-                    # 원본 텍스트 박스 및 다운로드 제공
-                    render_result_box(res_text, "competitor_analysis")
+                    render_result_box(res_text, f"{selected_project}_competitor_analysis")
 
     # Tab 5: Seeding & Marketing Guide
     with tab5:
@@ -386,4 +455,4 @@ else:
                        - CTA (Call To Action - 구매 유도 문구)
                     """
                     response = model.generate_content(inputs + [prompt])
-                    render_result_box(response.text, "seeding_guide")
+                    render_result_box(response.text, f"{selected_project}_seeding_guide")
