@@ -148,12 +148,19 @@ with tab1:
             with st.spinner("이미지/링크/텍스트 분석 후 리스팅 작성 중..."):
                 model = genai.GenerativeModel(selected_model)
                 prompt = """
-                위 정보(이미지, URL, 텍스트)를 바탕으로 아마존 SEO 최적화 Listing을 생성하세요:
-                1. Product Title (200자 이내, 핵심 키워드 대문자 강조)
-                2. Bullet Points 5개 (핵심 셀링 포인트 위주)
-                3. Search Terms (249 Bytes 이내, 쉼표 없이 키워드만)
-                4. Product Description (⚠️ 중요: <p>, <b>, <br> 등의 HTML 태그를 절대로 사용하지 말고, 순수 텍스트(Plain Text)와 줄바꿈으로만 깔끔하게 작성하세요.)
-                """
+위 정보(이미지, URL, 텍스트)를 바탕으로 아마존 SEO 최적화 Listing을 생성하세요.
+
+[작성 지침]
+- 4번 Product Description 작성 시 <p>, <b>, <br> 등 어떠한 HTML 태그도 절대로 포함하지 마세요.
+- 오직 Plain Text와 줄바꿈(Enter)만을 사용하세요.
+- 출력 시 지침 사항이나 주의사항 텍스트는 결과물에 포함하지 마세요.
+
+[출력 형식]
+1. Product Title
+2. Bullet Points (5 Key Selling Points)
+3. Search Terms (Backend Keywords)
+4. Product Description
+"""
                 response = model.generate_content(inputs + [prompt])
                 st.markdown(response.text)
                 
