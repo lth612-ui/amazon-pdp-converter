@@ -49,7 +49,7 @@ def init_project_store(proj_name):
             "key_features": "",
             "competitor_url": "",
             "competitor_info": "",
-            "results": {} # 각 탭별 생성 결과 저장 (tab1, tab2, tab3, tab4, tab5)
+            "results": {}  # 각 탭별 생성 결과 저장 (tab1, tab2, tab3, tab4, tab5)
         }
 
 # 기본 프로젝트 공간 초기화
@@ -81,9 +81,10 @@ if st.sidebar.button("프로젝트 추가", use_container_width=True):
 
 # 기존 프로젝트 선택
 selected_project = st.sidebar.selectbox(
-    "📁 작업할 프로젝트 선택", 
+    "📁 작업할 프로젝트 선택",
     ["새 작업 (기본)"] + st.session_state.project_list,
-    index=(["새 작업 (기본)"] + st.session_state.project_list).index(st.session_state.current_project) if st.session_state.current_project in (["새 작업 (기본)"] + st.session_state.project_list) else 0
+    index=(["새 작업 (기본)"] + st.session_state.project_list).index(st.session_state.current_project)
+    if st.session_state.current_project in (["새 작업 (기본)"] + st.session_state.project_list) else 0
 )
 
 # 프로젝트 전환 시 현재 선택 업데이트
@@ -146,13 +147,13 @@ def crawl_amazon_url(url):
             title = soup.find(id="productTitle")
             return title.get_text(strip=True) if title else url
         return url
-    except:
+    except Exception:
         return url
 
 def render_result_box(result_text, file_prefix="amazon_pdp"):
     st.markdown("---")
     st.subheader("📄 AI 생성 결과 (원클릭 복사 & TXT 다운로드)")
-    
+
     col_dl, col_blank = st.columns([2, 8])
     with col_dl:
         st.download_button(
@@ -161,52 +162,73 @@ def render_result_box(result_text, file_prefix="amazon_pdp"):
             file_name=f"{file_prefix}_{int(time.time())}.txt",
             mime="text/plain"
         )
-        
+
     st.text_area(
         label="📌 아래 상자 우측 상단의 [복사 아이콘]을 누르면 전체 문구가 클립보드에 바로 복사됩니다:",
         value=result_text,
         height=250
     )
-    
+
     with st.expander("👁️ 서식 포함 예쁘게 보기 (Preview)", expanded=True):
         st.markdown(result_text, unsafe_allow_html=True)
 
+def extract_numbered_section(text, section_num, next_section_num):
+    """
+    언어(한/영)에 상관없이 'N. ...' 형태의 넘버링 섹션 헤더를 기준으로
+    section_num 부터 next_section_num 직전까지의 텍스트를 추출한다.
+    예: extract_numbered_section(text, 1, 2) -> "1." 헤더부터 "2." 헤더 전까지.
+    한글/영문 어느 쪽으로 생성되든 숫자 헤더 패턴 자체는 동일하게 나오므로
+    특정 언어 문구를 하드코딩하지 않는다.
+    """
+    # 마크다운 헤더(#), 볼드(**), 순수 숫자 등 다양한 표기를 허용
+    pattern = rf"(?:^|\n)\s*(?:#{{1,4}}\s*)?\**{section_num}\.\s.*?(?=\n\s*(?:#{{1,4}}\s*)?\**{next_section_num}\.\s|\Z)"
+    match = re.search(pattern, text, re.DOTALL)
+    if match:
+        return match.group(0).strip()
+    # 매칭 실패 시에도 무의미하게 잘린 텍스트를 보여주지 않도록 원문 전체를 반환
+    return text
+
 def highlight_usp(text, raw_keywords):
+    """
+    사용자가 입력한 key_features 에서만 키워드를 추출해 하이라이트한다.
+    (특정 제품 카테고리에 종속된 하드코딩 키워드는 사용하지 않음 -> 범용성 확보)
+    """
     keywords_to_highlight = set()
-    
+
     if isinstance(raw_keywords, str) and raw_keywords.strip():
         words = [w.strip() for w in re.split(r'[,/|\s]+', raw_keywords) if len(w.strip()) > 1]
         for w in words:
             keywords_to_highlight.add(w)
-            
-    auto_patterns = [r'Niacinamide', r'Hyaluronic', r'Collagen', r'Peptide', r'Absorption', r'Fast-Acting', r'Bubble']
-    for pat in auto_patterns:
-        matches = re.findall(pat, text, flags=re.IGNORECASE)
-        for m in matches:
-            keywords_to_highlight.add(m.strip())
 
     highlighted = text
-    for kw in list(keywords_to_highlight)[:5]:
+    for kw in list(keywords_to_highlight)[:8]:
         pattern = re.compile(re.escape(kw), re.IGNORECASE)
-        highlighted = pattern.sub(f"<mark style='background-color: #ffeb3b; color: #111111; padding: 2px 5px; border-radius: 3px; font-weight: bold;'>{kw}</mark>", highlighted)
-    
+        highlighted = pattern.sub(
+            f"<mark style='background-color: #ffeb3b; color: #111111; padding: 2px 5px; "
+            f"border-radius: 3px; font-weight: bold;'>{kw}</mark>",
+            highlighted
+        )
+
     highlighted = highlighted.replace("\n", "<br>")
     return highlighted
 
 def parse_bulk_listing(raw_text):
     title = ""
     bullets = ["", "", "", "", ""]
-    
-    title_match = re.search(r"(?:1\.\s*Product Title|Title)[:\n]*\s*(.*?)(?=\n+#|\n+2\.|\n+Bullet|\Z)", raw_text, re.DOTALL | re.IGNORECASE)
+
+    title_match = re.search(
+        r"(?:##?\s*1\.\s*Product Title|Title)[:\n]*\s*(.*?)(?=\n+#|\n+##?\s*2\.|\n+Bullet|\Z)",
+        raw_text, re.DOTALL | re.IGNORECASE
+    )
     if title_match:
         title = title_match.group(1).strip()
-        
+
     bullet_matches = re.findall(r"(?:[*•]|\d+\.)\s*(.*)", raw_text)
     clean_bullets = [b.strip() for b in bullet_matches if len(b.strip()) > 5]
-    
+
     for i in range(min(5, len(clean_bullets))):
         bullets[i] = clean_bullets[i]
-        
+
     return title, bullets[0], bullets[1], bullets[2], bullets[3], bullets[4]
 
 # ==========================================
@@ -221,35 +243,49 @@ st.divider()
 if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
     st.subheader("📦 다중 상품 일괄 생성 (Bulk Processing)")
     st.info("제품명이나 특징이 담긴 CSV 파일을 업로드하면 한 번에 리스팅을 생성합니다.")
-    
+
     uploaded_csv = st.file_uploader("CSV 파일 업로드", type=['csv'])
-    
+
     if uploaded_csv is not None:
         df = pd.read_csv(uploaded_csv)
         st.dataframe(df.head())
-        
+
         if st.button("🚀 일괄 생성 시작 (Batch Run)", type="primary"):
             progress_bar = st.progress(0)
             status_text = st.empty()
-            
+
             titles, b1_list, b2_list, b3_list, b4_list, b5_list, raw_results = [], [], [], [], [], [], []
             total_items = len(df)
             model = genai.GenerativeModel(selected_model)
-            
+
             for i, row in df.iterrows():
                 product_info_bulk = str(row.to_dict())
                 status_text.text(f"처리 중: {i+1}번째 상품 ({i+1}/{total_items})")
-                
-                prompt = f"""다음 상품 정보를 바탕으로 아마존 SEO Listing (Title 및 5 Bullet Points)을 생성하세요.
+
+                # [수정] parse_bulk_listing()이 기대하는 출력 포맷을 명시적으로 강제한다.
+                # 포맷 지정이 없으면 모델이 자유 형식으로 답해 파싱이 비어있는 값으로 실패할 수 있다.
+                prompt = f"""다음 상품 정보를 바탕으로 아마존 SEO Listing을 생성하세요.
                 타겟 국가: {target_country}, 브랜드 톤: {brand_tone}, 추가지시사항: {tone_extra}
-                상품정보: {product_info_bulk}"""
-                
+                상품정보: {product_info_bulk}
+
+                [출력 형식 - 반드시 아래 마크다운 형식을 그대로 지켜서 작성하세요]
+                ## 1. Product Title
+                (제목 한 줄)
+
+                ## 2. Bullet Points
+                * (첫 번째 셀링 포인트)
+                * (두 번째 셀링 포인트)
+                * (세 번째 셀링 포인트)
+                * (네 번째 셀링 포인트)
+                * (다섯 번째 셀링 포인트)
+                """
+
                 try:
                     time.sleep(2)
                     response = model.generate_content(prompt)
                     raw_text = response.text
                     title, b1, b2, b3, b4, b5 = parse_bulk_listing(raw_text)
-                    
+
                     titles.append(title)
                     b1_list.append(b1)
                     b2_list.append(b2)
@@ -265,9 +301,9 @@ if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
                     b4_list.append("")
                     b5_list.append("")
                     raw_results.append(f"에러 발생: {e}")
-                
+
                 progress_bar.progress((i + 1) / total_items)
-                
+
             df['AI_Title'] = titles
             df['Bullet_1'] = b1_list
             df['Bullet_2'] = b2_list
@@ -275,10 +311,11 @@ if work_mode == "여러 상품 일괄 생성 (Bulk CSV)":
             df['Bullet_4'] = b4_list
             df['Bullet_5'] = b5_list
             df['Full_Raw_Output'] = raw_results
-            
+
             status_text.text("✅ 일괄 생성 완료! 아래에서 파일을 다운로드하세요.")
             csv_data = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 전체 결과 다운로드 (CSV)", data=csv_data, file_name=f"bulk_generated_{int(time.time())}.csv", mime="text/csv")
+            st.download_button("📥 전체 결과 다운로드 (CSV)", data=csv_data,
+                                file_name=f"bulk_generated_{int(time.time())}.csv", mime="text/csv")
 
 else:
     st.markdown("### 📥 1. 제품 정보 입력 (링크/이미지/텍스트 중 선택 가능)")
@@ -288,19 +325,19 @@ else:
     with col_input1:
         st.markdown("#### 🔗 [방법 A] 아마존 URL 또는 이미지로 자동 분석")
         my_product_url = st.text_input(
-            "내 제품 아마존 URL", 
+            "내 제품 아마존 URL",
             value=current_p_data["my_product_url"],
             placeholder="https://www.amazon.com/dp/...",
             key=f"url_{st.session_state.current_project}"
         )
         current_p_data["my_product_url"] = my_product_url
-        
+
         uploaded_image = st.file_uploader("제품 패키지 / 상세페이지 이미지 업로드", type=["png", "jpg", "jpeg", "webp"])
 
     with col_input2:
         st.markdown("#### 📝 [방법 B] 직접 텍스트 입력")
         product_name = st.text_input(
-            "제품명 (미입력 시 URL/이미지에서 자동 추론)", 
+            "제품명 (미입력 시 URL/이미지에서 자동 추론)",
             value=current_p_data["product_name"],
             placeholder="예: 비타민 C 세럼 30ml",
             key=f"name_{st.session_state.current_project}"
@@ -308,9 +345,9 @@ else:
         current_p_data["product_name"] = product_name
 
         key_features = st.text_area(
-            "주요 특징/성분/소구점", 
+            "주요 특징/성분/소구점",
             value=current_p_data["key_features"],
-            placeholder="예: 순수 비타민C 15%, 피부 톤 개선, 끈적임 없는 수분제형", 
+            placeholder="예: 순수 비타민C 15%, 피부 톤 개선, 끈적임 없는 수분제형",
             height=100,
             key=f"feat_{st.session_state.current_project}"
         )
@@ -320,7 +357,7 @@ else:
         col_comp1, col_comp2 = st.columns(2)
         with col_comp1:
             competitor_url = st.text_input(
-                "경쟁사 제품 아마존 URL", 
+                "경쟁사 제품 아마존 URL",
                 value=current_p_data["competitor_url"],
                 placeholder="https://www.amazon.com/dp/...",
                 key=f"comp_url_{st.session_state.current_project}"
@@ -328,7 +365,7 @@ else:
             current_p_data["competitor_url"] = competitor_url
         with col_comp2:
             competitor_info = st.text_input(
-                "경쟁사 특징/단점 메모", 
+                "경쟁사 특징/단점 메모",
                 value=current_p_data["competitor_info"],
                 placeholder="예: 경쟁사는 가격이 비싸고 용량이 적음",
                 key=f"comp_info_{st.session_state.current_project}"
@@ -338,9 +375,9 @@ else:
     st.markdown("---")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📝 Amazon Listing (PDP)", 
-        "🎨 A+ Content Plan", 
-        "🎯 PPC Strategy", 
+        "📝 Amazon Listing (PDP)",
+        "🎨 A+ Content Plan",
+        "🎯 PPC Strategy",
         "⚔️ 경쟁사 비교 분석",
         "📢 Seeding & Marketing Guide"
     ])
@@ -404,7 +441,7 @@ else:
             res_text = current_p_data["results"]["tab1"]
             full_check_text = f"{product_name} {key_features} {res_text}"
             forbidden = check_forbidden_words(full_check_text)
-            
+
             st.subheader("📊 리스팅 최적화 리포트")
             col1, col2 = st.columns([1, 2])
             with col1:
@@ -416,7 +453,7 @@ else:
                     st.error(f"⚠️ **아마존 정책 위반 의심 단어 감지 ({len(forbidden)}개)**: {', '.join(forbidden)}")
                 else:
                     st.success("✅ 아마존 정책 위반 금지어가 감지되지 않았습니다.")
-            
+
             render_result_box(res_text, f"{st.session_state.current_project}_pdp_listing")
 
     # Tab 2: A+ Content
@@ -468,7 +505,10 @@ else:
     with tab4:
         if st.button("⚔️ 1:1 경쟁사 비교 분석 실행"):
             inputs = get_input_contents()
-            if not competitor_url and not competitor_info:
+            # [수정] 경쟁사 정보뿐 아니라 내 제품 정보(inputs)도 비어있지 않은지 함께 검증
+            if len(inputs) <= 1:
+                st.warning("내 제품 정보(URL/이미지/제품명 등)를 먼저 입력해 주세요!")
+            elif not competitor_url and not competitor_info:
                 st.warning("상단의 경쟁사 비교 설정에 경쟁사 URL 또는 정보를 입력해 주세요!")
             else:
                 with st.spinner("내 제품과 경쟁사 비교 분석 중..."):
@@ -477,7 +517,7 @@ else:
                     prompt = f"""
                     내 제품 정보와 다음 경쟁사 정보를 비교 분석해 주세요: {comp_text}
 
-                    [출력 내용]
+                    [출력 내용 - 아래 번호 순서를 반드시 지켜서 작성]
                     1. 내 제품의 독점적 우위 (USP)
                     2. 경쟁사 고객 스틸을 위한 핵심 마케팅 메시지
                     3. PDP에서 강조해야 할 비주얼 요소
@@ -489,11 +529,11 @@ else:
         if "tab4" in current_p_data["results"]:
             res_text = current_p_data["results"]["tab4"]
             st.markdown("#### 💡 Our Unique Selling Proposition (USP) Highlight")
-            
-            usp_match = re.search(r"1\.\s*내 제품의 독점적 우위.*?(?=\n\n2\.|\n+2\.|\Z)", res_text, re.DOTALL | re.IGNORECASE)
-            usp_text = usp_match.group(0) if usp_match else res_text[:300]
+
+            # [수정] 언어(한/영)에 관계없이 "1." 넘버링 헤더를 기준으로 섹션을 추출
+            usp_text = extract_numbered_section(res_text, 1, 2)
             highlighted_usp = highlight_usp(usp_text, key_features)
-            
+
             st.markdown(
                 f"""
                 <div style="background-color: #1e1e24; color: #ffffff; padding: 18px; border-radius: 8px; border: 1px solid #33333e; margin-bottom: 20px; line-height: 1.6;">
