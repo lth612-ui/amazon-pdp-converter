@@ -7,17 +7,8 @@ import traceback
 try:
     SOURCE = Path(__file__).with_name("main_recoverd.py")
     code = SOURCE.read_text(encoding="utf-8")
-
-    # Patch stale Gemini model IDs without rewriting the recovered source file.
-    code = code.replace(
-        '"gemini-3.6-flash" if "Flash" in model_choice else "gemini-3.1-pro"',
-        '"gemini-3.8-flash" if "Flash" in model_choice else "gemini-3.1-pro-preview"',
-    )
-
     exec(compile(code, str(SOURCE), "exec"), globals(), globals())
 except Exception as exc:
-    # Import Streamlit only in the fallback path so a dependency failure in the
-    # recovered app can still be displayed instead of killing the process.
     import streamlit as st
 
     try:
